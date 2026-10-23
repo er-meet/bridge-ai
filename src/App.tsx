@@ -104,7 +104,8 @@ export const App: React.FC = () => {
       setIsDemoMode(true);
     }
     setIsAnalyzing(true);
-    setAnalysisStage('Preparing multimodal inputs...');
+    setAnalysisStage('Sending your input to Gemini...');
+    const progressTimers: number[] = [];
 
     try {
       const formData = new FormData();
@@ -118,22 +119,16 @@ export const App: React.FC = () => {
         formData.append('files', file);
       }
 
-      // Simulated realistic progress updates
-      const t1 = setTimeout(() => {
-        setAnalysisStage('Extracting multimodal evidence & entities...');
-      }, 700);
-
-      const t2 = setTimeout(() => {
-        setAnalysisStage('Reasoning and structuring actionable plan...');
-      }, 1600);
+      // The API does not provide streaming progress, so report the real wait
+      // state instead of implying Gemini has reached a specific reasoning step.
+      progressTimers.push(window.setTimeout(() => {
+        setAnalysisStage('Waiting for Gemini to return the structured report...');
+      }, 1000));
 
       const response = await fetch('/api/analyze', {
         method: 'POST',
         body: formData,
       });
-
-      clearTimeout(t1);
-      clearTimeout(t2);
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
@@ -154,6 +149,7 @@ export const App: React.FC = () => {
       console.error('Analysis error:', err);
       throw err;
     } finally {
+      progressTimers.forEach(window.clearTimeout);
       setIsAnalyzing(false);
       setAnalysisStage('');
     }

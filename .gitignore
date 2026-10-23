@@ -33,6 +33,7 @@ dist-ssr
 temp_uploads
 uploads
 *.tmp
+/.test-tmp/
 *.tsbuildinfo
 vite.config.d.ts
 vite.config.js

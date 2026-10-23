@@ -203,6 +203,21 @@ export const ResultsDashboard: React.FC<ResultsDashboardProps> = ({
 
   const priorityStyle = getPriorityStyle(result.priority.level);
   const PriorityIcon = priorityStyle.icon;
+  const factStatusOrder: FactStatus[] = ['observed', 'reported', 'inferred', 'unknown'];
+  const factStatusStyles: Record<FactStatus, { label: string; color: string; dot: string }> = {
+    observed: { label: 'Observed', color: 'bg-emerald-500', dot: 'bg-emerald-500' },
+    reported: { label: 'Reported', color: 'bg-blue-500', dot: 'bg-blue-500' },
+    inferred: { label: 'Inferred', color: 'bg-violet-500', dot: 'bg-violet-500' },
+    unknown: { label: 'Unknown', color: 'bg-stone-300', dot: 'bg-stone-400' },
+  };
+  const factCounts = factStatusOrder.reduce((counts, status) => {
+    counts[status] = result.extracted_facts.filter((fact) => fact.status === status).length;
+    return counts;
+  }, {} as Record<FactStatus, number>);
+  const completedActions = result.recommended_actions.filter((action) => action.completed).length;
+  const actionProgress = result.recommended_actions.length
+    ? Math.round((completedActions / result.recommended_actions.length) * 100)
+    : 0;
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
@@ -367,6 +382,59 @@ export const ResultsDashboard: React.FC<ResultsDashboardProps> = ({
           {result.summary}
         </p>
       </div>
+
+      {/* Visual overview of evidence quality and action progress */}
+      <section className="grid grid-cols-1 lg:grid-cols-2 gap-4" aria-label="Analysis visual summary">
+        <div className="relative overflow-hidden p-5 sm:p-6 rounded-2xl border border-ink-border bg-white shadow-card">
+          <div className="absolute -right-10 -top-16 h-40 w-40 rounded-full bg-brand-50 blur-2xl" />
+          <div className="relative">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink-muted">Evidence map</p>
+                <h3 className="mt-1 text-base font-semibold text-ink">What the input supports</h3>
+              </div>
+              <span className="rounded-full border border-ink-border bg-canvas-subtle px-2.5 py-1 text-[11px] font-medium text-ink-secondary">
+                {result.extracted_facts.length} {result.extracted_facts.length === 1 ? 'signal' : 'signals'}
+              </span>
+            </div>
+            <div className="mt-5 h-3 overflow-hidden rounded-full bg-stone-100 flex" role="img" aria-label={factStatusOrder.map((status) => `${factCounts[status]} ${factStatusStyles[status].label.toLowerCase()}`).join(', ')}>
+              {factStatusOrder.map((status) => factCounts[status] > 0 && (
+                <div key={status} className={factStatusStyles[status].color} style={{ width: `${(factCounts[status] / Math.max(result.extracted_facts.length, 1)) * 100}%` }} />
+              ))}
+              {result.extracted_facts.length === 0 && <div className="w-full bg-stone-200" />}
+            </div>
+            <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3">
+              {factStatusOrder.map((status) => (
+                <div key={status} className="flex items-center justify-between gap-2 text-xs">
+                  <span className="flex items-center gap-2 text-ink-secondary"><span className={`h-2 w-2 rounded-full ${factStatusStyles[status].dot}`} />{factStatusStyles[status].label}</span>
+                  <span className="font-mono font-semibold text-ink">{factCounts[status]}</span>
+                </div>
+              ))}
+            </div>
+            <p className="mt-4 border-t border-ink-border pt-3 text-[11px] leading-relaxed text-ink-muted">Reported details are claims from the submission; observed details are visible in the supplied evidence.</p>
+          </div>
+        </div>
+
+        <div className="p-5 sm:p-6 rounded-2xl border border-ink-border bg-white shadow-card flex flex-col justify-between">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink-muted">Action plan</p>
+              <h3 className="mt-1 text-base font-semibold text-ink">Human-reviewed next steps</h3>
+            </div>
+            <span className="rounded-full bg-brand-50 px-2.5 py-1 text-[11px] font-semibold text-brand-700">{completedActions}/{result.recommended_actions.length} complete</span>
+          </div>
+          <div className="mt-5">
+            <div className="flex items-end justify-between mb-2">
+              <span className="text-sm text-ink-secondary">Progress</span>
+              <span className="font-mono text-2xl font-semibold tracking-tight text-ink">{actionProgress}<span className="text-sm text-ink-muted">%</span></span>
+            </div>
+            <div className="h-2.5 overflow-hidden rounded-full bg-canvas-muted" role="progressbar" aria-label="Recommended actions completed" aria-valuenow={actionProgress} aria-valuemin={0} aria-valuemax={100}>
+              <div className="h-full rounded-full bg-brand-600 transition-all duration-500" style={{ width: `${actionProgress}%` }} />
+            </div>
+            <p className="mt-4 text-[11px] leading-relaxed text-ink-muted">Progress updates as you check off steps below. BridgeAI does not submit reports or contact services.</p>
+          </div>
+        </div>
+      </section>
 
       {/* Extracted Facts & Evidence Grid */}
       <div className="p-5 sm:p-6 bg-white rounded-2xl border border-ink-border shadow-card space-y-4">

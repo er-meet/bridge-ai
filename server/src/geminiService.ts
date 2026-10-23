@@ -1,6 +1,7 @@
-import { GoogleGenAI, Schema, Type } from '@google/genai';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenAI, Schema, ThinkingLevel, Type } from '@google/genai';
 import { BridgeAnalysisResult, BridgeAnalysisResultSchema } from './schema.js';
+
+const DEFAULT_GEMINI_TIMEOUT_MS = 120_000;
 
 export interface MultimodalFile {
   buffer: Buffer;
@@ -182,23 +183,29 @@ export class GeminiService {
   private apiKey: string | null;
   private modelName: string;
   private genAIClient: GoogleGenAI | null = null;
-  private legacyGenAIClient: GoogleGenerativeAI | null = null;
+  private timeoutMs: number;
 
   constructor() {
     const rawKey = process.env.GEMINI_API_KEY?.trim() || null;
     this.apiKey = isPlaceholderKey(rawKey) ? null : rawKey;
     
-    // Normalize configured model name; if invalid or gemini-2.5-flash is passed, normalize to gemini-1.5-flash
-    let rawModel = process.env.GEMINI_MODEL?.trim() || 'gemini-1.5-flash';
-    if (rawModel.includes('2.5')) {
-      rawModel = 'gemini-1.5-flash';
-    }
-    this.modelName = rawModel;
+    this.modelName = process.env.GEMINI_MODEL?.trim() || 'gemini-3.8-flash';
+    const configuredTimeout = Number.parseInt(process.env.GEMINI_TIMEOUT_MS || '', 10);
+    this.timeoutMs = Number.isFinite(configuredTimeout) && configuredTimeout > 0
+      ? configuredTimeout
+      : DEFAULT_GEMINI_TIMEOUT_MS;
 
     if (this.apiKey) {
       try {
-        this.genAIClient = new GoogleGenAI({ apiKey: this.apiKey });
-        this.legacyGenAIClient = new GoogleGenerativeAI(this.apiKey);
+        this.genAIClient = new GoogleGenAI({
+          apiKey: this.apiKey,
+          httpOptions: {
+            timeout: this.timeoutMs,
+            // A single retry helps recover from intermittent Gemini 5xx/504
+            // deadline errors without multiplying the wait through many retries.
+            retryOptions: { attempts: 2, initialDelay: 1, maxDelay: 2, jitter: 0.2 },
+          },
+        });
       } catch (err) {
         console.error('[GeminiService] Error initializing SDK clients:', err);
       }
@@ -230,6 +237,12 @@ export class GeminiService {
     if (msg.includes('ENOTFOUND') || msg.includes('ETIMEDOUT') || msg.includes('fetch failed')) {
       return 'Could not establish connection to the Google Gemini API. Please check your internet connection or use Demo Mode.';
     }
+    if (/timeout|timed out|abort/i.test(msg)) {
+      return `Gemini did not respond within ${Math.round(this.timeoutMs / 1000)} seconds. Check the connection, model availability, and API quota, then retry.`;
+    }
+    if (msg.includes('DEADLINE_EXCEEDED') || /\b504\b/.test(msg)) {
+      return 'Gemini timed out while processing this request, even after one retry. Please try again shortly or use Demo Mode.';
+    }
     return msg;
   }
 
@@ -257,12 +270,12 @@ export class GeminiService {
     let rawJsonText: string | null = null;
     let lastError: any = null;
 
-    // List of candidate models to try in order of fallback
-    const candidateModels = Array.from(
-      new Set([this.modelName, 'gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro'])
-    );
+    // Keep requests on the configured model. Silent model fallback can change
+    // behavior and hide configuration errors from the person operating the app.
+    const candidateModels = [this.modelName];
 
-    // Strategy 1: Attempt with @google/genai SDK across candidate models
+    // Make one request using the official SDK and configured model. The SDK
+    // timeout prevents a stalled upstream request from leaving the UI loading.
     if (this.genAIClient) {
       for (const modelToTry of candidateModels) {
         try {
@@ -287,6 +300,7 @@ export class GeminiService {
               responseMimeType: 'application/json',
               responseSchema: GEMINI_RESPONSE_SCHEMA,
               temperature: 0.1,
+              thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
             },
           });
 
@@ -302,48 +316,6 @@ export class GeminiService {
           );
           // If invalid API key, no candidate model will work; break early
           if (String(sdkError?.message).includes('API_KEY_INVALID') || String(sdkError?.message).includes('API key not valid')) {
-            break;
-          }
-        }
-      }
-    }
-
-    // Strategy 2: Fallback with @google/generative-ai SDK if Strategy 1 did not produce raw JSON
-    if (!rawJsonText && this.legacyGenAIClient) {
-      for (const modelToTry of candidateModels) {
-        try {
-          console.log(`[GeminiService] Trying fallback client with model: ${modelToTry}...`);
-          const model = this.legacyGenAIClient.getGenerativeModel({
-            model: modelToTry,
-            systemInstruction: SYSTEM_INSTRUCTION,
-            generationConfig: {
-              responseMimeType: 'application/json',
-              temperature: 0.1,
-            },
-          });
-
-          const parts: any[] = [];
-          for (const file of files) {
-            parts.push({
-              inlineData: {
-                mimeType: file.mimeType,
-                data: file.buffer.toString('base64'),
-              },
-            });
-          }
-          parts.push({ text: promptText });
-
-          const result = await model.generateContent(parts);
-          const response = await result.response;
-          rawJsonText = response.text();
-          if (rawJsonText) {
-            console.log(`[GeminiService] Successfully generated with fallback client: ${modelToTry}`);
-            break;
-          }
-        } catch (fallbackError: any) {
-          lastError = fallbackError;
-          console.warn(`[GeminiService] Fallback SDK model ${modelToTry} failed:`, fallbackError?.message || fallbackError);
-          if (String(fallbackError?.message).includes('API_KEY_INVALID') || String(fallbackError?.message).includes('API key not valid')) {
             break;
           }
         }
@@ -367,7 +339,7 @@ export class GeminiService {
     try {
       parsedData = JSON.parse(cleanedJson);
     } catch (parseError: any) {
-      console.error('[GeminiService] JSON parse error on raw output:', cleanedJson);
+      console.error('[GeminiService] Model returned malformed JSON.');
       throw new Error(`Model returned malformed JSON: ${parseError.message}`);
     }
 

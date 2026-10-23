@@ -5,7 +5,7 @@
 > *One interface. Multiple forms of human intent. Clearer decisions and actionable outcomes.*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Built with Gemini](https://img.shields.io/badge/AI-Google%20Gemini%202.5%20Flash-4285F4.svg)](https://aistudio.google.com/)
+[![Built with Gemini](https://img.shields.io/badge/AI-Google%20Gemini%203.8%20Flash-4285F4.svg)](https://aistudio.google.com/)
 [![React 18](https://img.shields.io/badge/Frontend-React%2018%20%2B%20TypeScript-61DAFB.svg)](https://react.dev/)
 [![Node.js & Express](https://img.shields.io/badge/Backend-Node.js%20%2B%20Express-339933.svg)](https://nodejs.org/)
 [![Validation](https://img.shields.io/badge/Validation-Zod%20Schema-3E67B1.svg)](https://zod.dev/)
@@ -62,7 +62,7 @@ Traditional public service portals and municipal reporting tools force users int
                                │  Multimodal JSON Schema Request
                                ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                    Google Gemini 2.5 Flash                  │
+│                    Google Gemini 3.8 Flash                  │
 │   - Multimodal Context Processing (Images + Audio + PDFs)   │
 │   - Low-temperature Factual Extraction                     │
 │   - Strictly Enforced JSON Schema Output                    │
@@ -122,8 +122,11 @@ The application adheres to a clean, restrained, human-centric design language:
    # Google Gemini API Key from Google AI Studio
    GEMINI_API_KEY=AIzaSy...your_actual_key_here
 
-   # Gemini Model (default: gemini-2.5-flash)
-   GEMINI_MODEL=gemini-2.5-flash
+   # Gemini Model (default: gemini-3.8-flash)
+   GEMINI_MODEL=gemini-3.8-flash
+
+   # Gemini request timeout (default: 90 seconds)
+   GEMINI_TIMEOUT_MS=90000
 
    # Port configuration
    PORT=3001
@@ -134,7 +137,7 @@ The application adheres to a clean, restrained, human-centric design language:
 
 > [!NOTE]  
 > **No API Key? No Problem!**  
-> If `GEMINI_API_KEY` is not provided, BridgeAI will automatically initialize in **Demo Mode**. You can run all preset scenarios and test custom inputs with instant pre-computed synthesis.
+> If `GEMINI_API_KEY` is not provided, BridgeAI runs in clearly labelled **Demo Mode**. Preset scenarios return fictional sample reports. Custom submissions are not analyzed by Gemini while Demo Mode is active.
 
 ---
 
@@ -222,7 +225,7 @@ Returns server status, model configuration, and API key availability.
 {
   "status": "ok",
   "hasApiKey": true,
-  "model": "gemini-2.5-flash",
+  "model": "gemini-3.8-flash",
   "demoModeAvailable": true,
   "maxFileSizeMB": 20
 }
