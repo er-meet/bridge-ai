@@ -162,11 +162,12 @@ app.post(
           return res.json(responseData);
         }
 
-        // If not forceDemo but no API key configured, return explicit error
+        // If not forceDemo but no API key configured, return actionable error
         return res.status(401).json({
           error:
-            'GEMINI_API_KEY is not configured on the server. Please add your Gemini API key to the .env file or enable Demo Mode to test with realistic scenarios.',
+            'GEMINI_API_KEY is not configured or is a placeholder in the server .env file. Please add a valid Gemini API key from Google AI Studio or enable Demo Mode to test with instant structured reports.',
           code: 'MISSING_API_KEY',
+          canFallbackToDemo: true,
           demoAvailable: true,
         });
       }
@@ -196,6 +197,9 @@ app.post(
       console.error('[POST /api/analyze] Error during analysis:', err);
       return res.status(500).json({
         error: err.message || 'An unexpected error occurred during multimodal analysis.',
+        code: 'GEMINI_CALL_FAILED',
+        canFallbackToDemo: true,
+        demoAvailable: true,
         details: process.env.NODE_ENV === 'development' ? err.stack : undefined,
       });
     }

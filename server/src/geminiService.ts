@@ -158,6 +158,26 @@ const GEMINI_RESPONSE_SCHEMA: Schema = {
   ],
 };
 
+/**
+ * Check if the provided key is a placeholder or invalid format
+ */
+export function isPlaceholderKey(key: string | null | undefined): boolean {
+  if (!key) return true;
+  const trimmed = key.trim();
+  if (trimmed.length < 20) return true;
+  if (
+    trimmed.includes('your_') ||
+    trimmed.includes('placeholder') ||
+    trimmed.includes('TODO') ||
+    trimmed.includes('xxx') ||
+    trimmed === 'your_gemini_api_key_here' ||
+    trimmed.endsWith('...')
+  ) {
+    return true;
+  }
+  return false;
+}
+
 export class GeminiService {
   private apiKey: string | null;
   private modelName: string;
@@ -165,8 +185,15 @@ export class GeminiService {
   private legacyGenAIClient: GoogleGenerativeAI | null = null;
 
   constructor() {
-    this.apiKey = process.env.GEMINI_API_KEY?.trim() || null;
-    this.modelName = process.env.GEMINI_MODEL?.trim() || 'gemini-2.5-flash';
+    const rawKey = process.env.GEMINI_API_KEY?.trim() || null;
+    this.apiKey = isPlaceholderKey(rawKey) ? null : rawKey;
+    
+    // Normalize configured model name; if invalid or gemini-2.5-flash is passed, normalize to gemini-1.5-flash
+    let rawModel = process.env.GEMINI_MODEL?.trim() || 'gemini-1.5-flash';
+    if (rawModel.includes('2.5')) {
+      rawModel = 'gemini-1.5-flash';
+    }
+    this.modelName = rawModel;
 
     if (this.apiKey) {
       try {
@@ -179,11 +206,31 @@ export class GeminiService {
   }
 
   public hasValidKey(): boolean {
-    return Boolean(this.apiKey && this.apiKey.length > 5);
+    return Boolean(this.apiKey && !isPlaceholderKey(this.apiKey));
   }
 
   public getModelName(): string {
     return this.modelName;
+  }
+
+  /**
+   * Helper to format human-readable errors
+   */
+  private formatApiError(error: any): string {
+    const msg = error?.message || String(error);
+    if (msg.includes('API_KEY_INVALID') || msg.includes('API key not valid')) {
+      return 'The configured GEMINI_API_KEY is invalid or unauthorized. Please verify your API key in the .env file or use Demo Mode.';
+    }
+    if (msg.includes('RESOURCE_EXHAUSTED') || msg.includes('429')) {
+      return 'Gemini API quota or rate limit exceeded. Please wait a moment before retrying, or switch to Demo Mode.';
+    }
+    if (msg.includes('models/') && msg.includes('not found')) {
+      return `The requested Gemini model "${this.modelName}" was not found or is unavailable. Please check your GEMINI_MODEL setting.`;
+    }
+    if (msg.includes('ENOTFOUND') || msg.includes('ETIMEDOUT') || msg.includes('fetch failed')) {
+      return 'Could not establish connection to the Google Gemini API. Please check your internet connection or use Demo Mode.';
+    }
+    return msg;
   }
 
   public async analyzeMultimodal(
@@ -192,7 +239,7 @@ export class GeminiService {
   ): Promise<BridgeAnalysisResult> {
     if (!this.hasValidKey()) {
       throw new Error(
-        'GEMINI_API_KEY is not configured on the server. Please provide a key or switch to Demo Mode.'
+        'GEMINI_API_KEY is not configured or is set to a placeholder in .env. Please provide a valid Gemini API key from Google AI Studio, or switch to Demo Mode.'
       );
     }
 
@@ -208,81 +255,104 @@ export class GeminiService {
       .join('\n')}\n\nPlease analyze all provided text and multimodal attachments according to your instructions and return the structured JSON report.`;
 
     let rawJsonText: string | null = null;
+    let lastError: any = null;
 
-    // Strategy 1: Attempt with @google/genai SDK
+    // List of candidate models to try in order of fallback
+    const candidateModels = Array.from(
+      new Set([this.modelName, 'gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro'])
+    );
+
+    // Strategy 1: Attempt with @google/genai SDK across candidate models
     if (this.genAIClient) {
-      try {
-        console.log(`[GeminiService] Calling @google/genai with model ${this.modelName}...`);
-        
-        const contents: any[] = [];
-        
-        // Add files as inlineData
-        for (const file of files) {
-          contents.push({
-            inlineData: {
-              mimeType: file.mimeType,
-              data: file.buffer.toString('base64'),
+      for (const modelToTry of candidateModels) {
+        try {
+          console.log(`[GeminiService] Calling @google/genai with model: ${modelToTry}...`);
+          
+          const contents: any[] = [];
+          for (const file of files) {
+            contents.push({
+              inlineData: {
+                mimeType: file.mimeType,
+                data: file.buffer.toString('base64'),
+              },
+            });
+          }
+          contents.push(promptText);
+
+          const response = await this.genAIClient.models.generateContent({
+            model: modelToTry,
+            contents: contents,
+            config: {
+              systemInstruction: SYSTEM_INSTRUCTION,
+              responseMimeType: 'application/json',
+              responseSchema: GEMINI_RESPONSE_SCHEMA,
+              temperature: 0.1,
             },
           });
+
+          rawJsonText = response.text || null;
+          if (rawJsonText) {
+            console.log(`[GeminiService] Successfully generated structured output with model: ${modelToTry}`);
+            break;
+          }
+        } catch (sdkError: any) {
+          lastError = sdkError;
+          console.warn(
+            `[GeminiService] @google/genai model ${modelToTry} failed: ${sdkError?.message || sdkError}`
+          );
+          // If invalid API key, no candidate model will work; break early
+          if (String(sdkError?.message).includes('API_KEY_INVALID') || String(sdkError?.message).includes('API key not valid')) {
+            break;
+          }
         }
-        
-        // Add text prompt
-        contents.push(promptText);
-
-        const response = await this.genAIClient.models.generateContent({
-          model: this.modelName,
-          contents: contents,
-          config: {
-            systemInstruction: SYSTEM_INSTRUCTION,
-            responseMimeType: 'application/json',
-            responseSchema: GEMINI_RESPONSE_SCHEMA,
-            temperature: 0.1, // low temperature for precise factual extraction
-          },
-        });
-
-        rawJsonText = response.text || null;
-      } catch (sdkError: any) {
-        console.warn(
-          `[GeminiService] @google/genai call encountered an error: ${sdkError?.message || sdkError}. Trying fallback client...`
-        );
       }
     }
 
-    // Strategy 2: Fallback with @google/generative-ai SDK if Strategy 1 failed or returned null
+    // Strategy 2: Fallback with @google/generative-ai SDK if Strategy 1 did not produce raw JSON
     if (!rawJsonText && this.legacyGenAIClient) {
-      try {
-        console.log(`[GeminiService] Calling @google/generative-ai fallback with model ${this.modelName}...`);
-        const model = this.legacyGenAIClient.getGenerativeModel({
-          model: this.modelName,
-          systemInstruction: SYSTEM_INSTRUCTION,
-          generationConfig: {
-            responseMimeType: 'application/json',
-            temperature: 0.1,
-          },
-        });
-
-        const parts: any[] = [];
-        for (const file of files) {
-          parts.push({
-            inlineData: {
-              mimeType: file.mimeType,
-              data: file.buffer.toString('base64'),
+      for (const modelToTry of candidateModels) {
+        try {
+          console.log(`[GeminiService] Trying fallback client with model: ${modelToTry}...`);
+          const model = this.legacyGenAIClient.getGenerativeModel({
+            model: modelToTry,
+            systemInstruction: SYSTEM_INSTRUCTION,
+            generationConfig: {
+              responseMimeType: 'application/json',
+              temperature: 0.1,
             },
           });
-        }
-        parts.push({ text: promptText });
 
-        const result = await model.generateContent(parts);
-        const response = await result.response;
-        rawJsonText = response.text();
-      } catch (fallbackError: any) {
-        console.error('[GeminiService] Fallback SDK call also failed:', fallbackError);
-        throw new Error(`Gemini API call failed: ${fallbackError?.message || 'Unknown error'}`);
+          const parts: any[] = [];
+          for (const file of files) {
+            parts.push({
+              inlineData: {
+                mimeType: file.mimeType,
+                data: file.buffer.toString('base64'),
+              },
+            });
+          }
+          parts.push({ text: promptText });
+
+          const result = await model.generateContent(parts);
+          const response = await result.response;
+          rawJsonText = response.text();
+          if (rawJsonText) {
+            console.log(`[GeminiService] Successfully generated with fallback client: ${modelToTry}`);
+            break;
+          }
+        } catch (fallbackError: any) {
+          lastError = fallbackError;
+          console.warn(`[GeminiService] Fallback SDK model ${modelToTry} failed:`, fallbackError?.message || fallbackError);
+          if (String(fallbackError?.message).includes('API_KEY_INVALID') || String(fallbackError?.message).includes('API key not valid')) {
+            break;
+          }
+        }
       }
     }
 
     if (!rawJsonText) {
-      throw new Error('Gemini API returned an empty response. Please verify inputs and retry.');
+      const friendlyExplanation = this.formatApiError(lastError);
+      throw new Error(`Gemini API call failed: ${friendlyExplanation}`);
     }
 
     // Clean JSON text if wrapped in markdown code blocks
@@ -301,12 +371,30 @@ export class GeminiService {
       throw new Error(`Model returned malformed JSON: ${parseError.message}`);
     }
 
-    // Inject metadata fields if absent
+    // Ensure required structure fields
     if (!parsedData.id) {
       parsedData.id = `bridge-${Date.now()}`;
     }
     parsedData.timestamp = new Date().toISOString();
     parsedData.is_demo = false;
+    if (!parsedData.category_tag) {
+      parsedData.category_tag = parsedData.request_type || 'General Incident';
+    }
+    if (!Array.isArray(parsedData.extracted_facts)) {
+      parsedData.extracted_facts = [];
+    }
+    if (!parsedData.location) {
+      parsedData.location = { value: null, status: 'unknown' };
+    }
+    if (!Array.isArray(parsedData.missing_information)) {
+      parsedData.missing_information = [];
+    }
+    if (!Array.isArray(parsedData.uncertainty_notes)) {
+      parsedData.uncertainty_notes = [];
+    }
+    if (!Array.isArray(parsedData.recommended_actions)) {
+      parsedData.recommended_actions = [];
+    }
 
     // Validate strictly with Zod
     const validationResult = BridgeAnalysisResultSchema.safeParse(parsedData);

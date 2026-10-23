@@ -96,15 +96,20 @@ export const App: React.FC = () => {
   const handleAnalyze = async (
     text: string,
     files: File[],
-    scenarioId?: string
+    scenarioId?: string,
+    overrideDemo?: boolean
   ): Promise<void> => {
+    const demoFlag = overrideDemo !== undefined ? overrideDemo : isDemoMode;
+    if (demoFlag && !isDemoMode) {
+      setIsDemoMode(true);
+    }
     setIsAnalyzing(true);
     setAnalysisStage('Preparing multimodal inputs...');
 
     try {
       const formData = new FormData();
       formData.append('text', text);
-      formData.append('isDemo', String(isDemoMode));
+      formData.append('isDemo', String(demoFlag));
       if (scenarioId) {
         formData.append('scenarioId', scenarioId);
       }
@@ -183,6 +188,7 @@ export const App: React.FC = () => {
             analysisStage={analysisStage}
             isDemoMode={isDemoMode}
             onSelectScenario={(id) => setSelectedScenarioId(id)}
+            onSwitchToDemo={() => setIsDemoMode(true)}
             maxFileSizeMB={maxFileSizeMB}
           />
         )}

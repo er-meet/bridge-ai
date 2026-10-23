@@ -13,17 +13,19 @@ import {
   Loader2,
   Info,
   CheckCircle2,
+  Sparkles,
 } from 'lucide-react';
 import { UploadedFileItem } from '../types/index.js';
 import { SCENARIO_PRESETS } from '../data/demoScenarios.js';
 import { AudioRecorder } from './AudioRecorder.js';
 
 interface WorkspaceInputProps {
-  onAnalyze: (text: string, files: File[], scenarioId?: string) => Promise<void>;
+  onAnalyze: (text: string, files: File[], scenarioId?: string, overrideDemo?: boolean) => Promise<void>;
   isAnalyzing: boolean;
   analysisStage: string;
   isDemoMode: boolean;
   onSelectScenario: (scenarioId: string) => void;
+  onSwitchToDemo?: () => void;
   maxFileSizeMB?: number;
 }
 
@@ -33,6 +35,7 @@ export const WorkspaceInput: React.FC<WorkspaceInputProps> = ({
   analysisStage,
   isDemoMode,
   onSelectScenario,
+  onSwitchToDemo,
   maxFileSizeMB = 20,
 }) => {
   const [inputText, setInputText] = useState('');
@@ -150,7 +153,7 @@ export const WorkspaceInput: React.FC<WorkspaceInputProps> = ({
     onSelectScenario(presetId);
   };
 
-  const handleSubmit = async () => {
+  const handleSubmit = async (overrideDemo?: boolean) => {
     if (!inputText.trim() && fileList.length === 0) {
       setErrorMessage('Please provide a text description or attach at least one piece of evidence.');
       return;
@@ -162,7 +165,7 @@ export const WorkspaceInput: React.FC<WorkspaceInputProps> = ({
     const rawFiles: File[] = fileList.filter((f) => f.file).map((f) => f.file as File);
 
     try {
-      await onAnalyze(inputText, rawFiles, activePresetId || undefined);
+      await onAnalyze(inputText, rawFiles, activePresetId || undefined, overrideDemo);
     } catch (err: any) {
       setErrorMessage(err.message || 'Analysis request failed. Please check inputs and retry.');
     }
@@ -437,7 +440,7 @@ export const WorkspaceInput: React.FC<WorkspaceInputProps> = ({
           {/* Primary Analyze Action Button */}
           <button
             type="button"
-            onClick={handleSubmit}
+            onClick={() => handleSubmit()}
             disabled={isAnalyzing || (!inputText.trim() && fileList.length === 0)}
             className="inline-flex items-center space-x-2 px-5 py-2.5 bg-ink text-white hover:bg-ink-secondary disabled:bg-stone-300 disabled:cursor-not-allowed text-xs sm:text-sm font-semibold rounded-xl transition-all shadow-subtle ml-auto"
           >
@@ -460,9 +463,27 @@ export const WorkspaceInput: React.FC<WorkspaceInputProps> = ({
       {errorMessage && (
         <div className="p-3.5 bg-red-50 border border-red-200 rounded-xl text-xs text-red-800 flex items-start space-x-2.5 shadow-subtle animate-in fade-in">
           <AlertTriangle className="w-4 h-4 flex-shrink-0 text-red-600 mt-0.5" />
-          <div className="flex-1">
-            <span className="font-semibold">Submission Warning: </span>
-            <span>{errorMessage}</span>
+          <div className="flex-1 space-y-1.5">
+            <div>
+              <span className="font-semibold">Analysis Warning: </span>
+              <span>{errorMessage}</span>
+            </div>
+            {onSwitchToDemo && (
+              <div className="pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onSwitchToDemo();
+                    setErrorMessage(null);
+                    handleSubmit(true);
+                  }}
+                  className="inline-flex items-center space-x-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-semibold shadow-subtle transition-colors"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>Switch to Demo Mode & Analyze Immediately</span>
+                </button>
+              </div>
+            )}
           </div>
           <button
             type="button"

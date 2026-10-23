@@ -13,10 +13,21 @@ describe('Error Handling and Fallback Guardrails', () => {
 
     // Calling analyze without key throws clear actionable error
     await expect(service.analyzeMultimodal('Road damaged')).rejects.toThrow(
-      /GEMINI_API_KEY is not configured on the server/
+      /GEMINI_API_KEY is not configured/
     );
 
     if (prevKey) process.env.GEMINI_API_KEY = prevKey;
+  });
+
+  it('detects placeholder keys like your_gemini_api_key_here and treats them as unconfigured', () => {
+    const prevKey = process.env.GEMINI_API_KEY;
+    process.env.GEMINI_API_KEY = 'your_gemini_api_key_here';
+
+    const service = new GeminiService();
+    expect(service.hasValidKey()).toBe(false);
+
+    if (prevKey) process.env.GEMINI_API_KEY = prevKey;
+    else delete process.env.GEMINI_API_KEY;
   });
 
   it('rejects malformed model output that violates the Zod contract', () => {
