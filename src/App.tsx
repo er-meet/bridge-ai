@@ -7,6 +7,7 @@ import { HowItWorksModal } from './components/HowItWorksModal.js';
 import { BridgeAnalysisResult, BridgeAnalysisResultSchema, SystemHealth } from './types/index.js';
 
 const STORAGE_KEY = 'bridge_ai_history_v1';
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
 
 export const App: React.FC = () => {
   const [hasApiKey, setHasApiKey] = useState(false);
@@ -18,7 +19,7 @@ export const App: React.FC = () => {
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isHowItWorksOpen, setIsHowItWorksOpen] = useState(false);
   const [selectedScenarioId, setSelectedScenarioId] = useState<string | null>(null);
-  const [maxFileSizeMB, setMaxFileSizeMB] = useState(20);
+  const [maxFileSizeMB, setMaxFileSizeMB] = useState(10);
 
   // Load history from localStorage & check system health
   useEffect(() => {
@@ -35,7 +36,7 @@ export const App: React.FC = () => {
     }
 
     // Check backend health
-    fetch('/api/health')
+    fetch(`${API_BASE_URL}/api/health`)
       .then((res) => res.json())
       .then((data: SystemHealth) => {
         setHasApiKey(Boolean(data.hasApiKey));
@@ -125,7 +126,7 @@ export const App: React.FC = () => {
         setAnalysisStage('Waiting for Gemini to return the structured report...');
       }, 1000));
 
-      const response = await fetch('/api/analyze', {
+      const response = await fetch(`${API_BASE_URL}/api/analyze`, {
         method: 'POST',
         body: formData,
       });

@@ -53,7 +53,7 @@ Traditional public service portals and municipal reporting tools force users int
 ┌─────────────────────────────────────────────────────────────┐
 │                   Server (Node.js + Express)                │
 │   - Secure In-Memory File Processing (Multer)               │
-│   - MIME Type & File Size Validation (up to 20MB)           │
+│   - MIME Type & File Size Validation (up to 10MB)           │
 │   - Responsible AI Safety Filter & Emergency Detector       │
 │   - Gemini Multimodal Service (@google/genai SDK)           │
 │   - Strict Runtime Validation with Zod Schema               │
@@ -132,7 +132,7 @@ The application adheres to a clean, restrained, human-centric design language:
    PORT=3001
 
    # File upload limit (in MB)
-   MAX_FILE_SIZE_MB=20
+   MAX_FILE_SIZE_MB=10
    ```
 
 > [!NOTE]  
@@ -227,7 +227,7 @@ Returns server status, model configuration, and API key availability.
   "hasApiKey": true,
   "model": "gemini-3.8-flash",
   "demoModeAvailable": true,
-  "maxFileSizeMB": 20
+  "maxFileSizeMB": 10
 }
 ```
 

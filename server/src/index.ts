@@ -16,7 +16,7 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const port = process.env.PORT || 3001;
-const maxFileSizeMB = parseInt(process.env.MAX_FILE_SIZE_MB || '20', 10);
+const maxFileSizeMB = parseInt(process.env.MAX_FILE_SIZE_MB || '10', 10);
 
 // Middleware
 app.use(cors());

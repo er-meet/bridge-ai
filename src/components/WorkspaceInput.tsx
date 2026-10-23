@@ -36,7 +36,7 @@ export const WorkspaceInput: React.FC<WorkspaceInputProps> = ({
   isDemoMode,
   onSelectScenario,
   onSwitchToDemo,
-  maxFileSizeMB = 20,
+  maxFileSizeMB = 10,
 }) => {
   const [inputText, setInputText] = useState('');
   const [fileList, setFileList] = useState<UploadedFileItem[]>([]);
