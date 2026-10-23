@@ -238,6 +238,33 @@ Accepts `multipart/form-data`:
 - `scenarioId` (string, optional): Preset scenario identifier (`road-hazard`, `disaster-assistance`, `healthcare-paperwork`)
 - `files` (File[], optional, up to 5 files): Uploaded images, PDFs, or audio recordings.
 
+---
+
+## Deploying to Vercel
+
+This project is configured for Vercel: Vite builds the site into `public/`, and the root `index.ts` exposes the Express API as a Vercel Function. Uploaded files use a **private Vercel Blob store** and go directly from the browser to Blob, so a 10 MB file does not pass through Vercel's 4.5 MB Function request limit. The API reads the private file for analysis and deletes the temporary blob afterward.
+
+1. Push the project to a GitHub repository and import that repository in Vercel.
+2. In Vercel, open **Storage → Create Database → Blob**. Choose **Private** access, then connect the store to this project. Vercel supplies the Blob credentials to the deployment.
+3. In **Project → Settings → Environment Variables**, add:
+
+   ```text
+   GEMINI_API_KEY=your_real_key
+   GEMINI_MODEL=gemini-3.8-flash
+   GEMINI_TIMEOUT_MS=120000
+   MAX_FILE_SIZE_MB=10
+   VITE_USE_VERCEL_BLOB_UPLOAD=true
+   ```
+
+   Keep `GEMINI_API_KEY` server-side; do not name it `VITE_GEMINI_API_KEY`. Leave `VITE_API_BASE_URL` unset so the app calls its same-origin API.
+
+4. Use the included `vercel.json` settings: build command `npm run build:vercel`, output directory `public`. Redeploy after environment variables and the Blob store are connected.
+5. Open the deployed site, check `/api/health` reports `hasApiKey: true`, and try a text-only analysis followed by an upload under 10 MB.
+
+The upload handler accepts the supported image, PDF, text, and audio MIME types only, with up to five files per analysis. The function is configured for up to 300 seconds, subject to your Vercel plan. This avoids a short platform timeout, but cannot prevent a timeout returned by Gemini itself. Local development continues to use the existing in-memory multipart upload path.
+
+Official references: [Express on Vercel](https://vercel.com/docs/frameworks/backend/express), [Function limits](https://vercel.com/docs/functions/limitations), [Blob client uploads](https://vercel.com/docs/vercel-blob/client-upload), and [private Blob storage](https://vercel.com/docs/vercel-blob/private-storage).
+
 Returns typed, validated `BridgeAnalysisResult` conforming to the JSON schema.
 
 ---

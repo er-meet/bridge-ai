@@ -5,6 +5,8 @@ import multer from 'multer';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
+import { del as deleteBlob, get as getBlob } from '@vercel/blob';
+import { handleUpload } from '@vercel/blob/client';
 import { GeminiService, MultimodalFile } from './geminiService.js';
 import { DEMO_SCENARIOS } from './demoData.js';
 import { BridgeAnalysisResultSchema } from './schema.js';
@@ -71,6 +73,28 @@ const upload = multer({
 });
 
 const geminiService = new GeminiService();
+const isVercel = Boolean(process.env.VERCEL);
+
+type BlobFileInput = { pathname: string; name: string; mimeType: string; size: number };
+
+async function streamToBuffer(stream: ReadableStream<Uint8Array>): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  const reader = stream.getReader();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks);
+}
+
+function cleanMimeType(value: string): string {
+  return value.split(';')[0].trim().toLowerCase();
+}
 
 // ==========================================
 // API ROUTES
@@ -112,18 +136,97 @@ app.get('/api/demo/scenario/:id', (req: Request, res: Response) => {
   res.json(scenario);
 });
 
+// Vercel Blob client uploads bypass the 4.5 MB function request limit. Blobs are
+// private and short-lived; /api/analyze reads and deletes them after processing.
+app.post('/api/blob-upload', async (req: Request, res: Response) => {
+  try {
+    const result = await handleUpload({
+      request: req,
+      body: req.body,
+      onBeforeGenerateToken: async (pathname) => {
+        const ext = pathname.split('.').pop()?.toLowerCase() || '';
+        const mimeByExtension: Record<string, string> = {
+          jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif',
+          pdf: 'application/pdf', txt: 'text/plain', mp3: 'audio/mpeg', wav: 'audio/wav',
+          ogg: 'audio/ogg', webm: 'audio/webm', aac: 'audio/aac', m4a: 'audio/mp4', mp4: 'audio/mp4',
+        };
+        const mimeType = mimeByExtension[ext];
+        if (!mimeType || !SUPPORTED_MIME_TYPES.has(mimeType)) {
+          throw new Error('Unsupported file format. Use JPG, PNG, WEBP, PDF, TXT, MP3, WAV, WEBM, OGG, AAC, M4A, or MP4.');
+        }
+        return {
+          allowedContentTypes: [mimeType],
+          maximumSizeInBytes: maxFileSizeMB * 1024 * 1024,
+          addRandomSuffix: true,
+        };
+      },
+    });
+    return res.status(200).json(result);
+  } catch (err: any) {
+    return res.status(400).json({ error: err.message || 'Could not authorize the private file upload.' });
+  }
+});
+
 // 4. Main Multimodal Analysis Endpoint
 app.post(
   '/api/analyze',
-  upload.array('files', 5),
+  (req: Request, res: Response, next: NextFunction) => {
+    if (req.is('application/json')) return next();
+    return upload.array('files', 5)(req, res, next);
+  },
   async (req: Request, res: Response) => {
+    const blobPathnames: string[] = [];
     try {
       const { text = '', isDemo = 'false', scenarioId = '' } = req.body;
       const forceDemo = isDemo === 'true' || isDemo === true;
-      const uploadedFiles = (req.files as Express.Multer.File[]) || [];
+      let uploadedFiles = (req.files as Express.Multer.File[]) || [];
+      let multimodalFiles: MultimodalFile[] = [];
+
+      if (req.is('application/json')) {
+        if (!isVercel) {
+          return res.status(400).json({ error: 'Direct Blob uploads are only enabled on Vercel.' });
+        }
+        const blobFiles = Array.isArray(req.body.files) ? req.body.files as BlobFileInput[] : [];
+        if (blobFiles.length > 5) {
+          return res.status(400).json({ error: 'Too many files uploaded. Maximum 5 files per analysis.' });
+        }
+        for (const file of blobFiles) {
+          if (!file || typeof file.pathname !== 'string' || !file.pathname.startsWith('bridgeai-temp/')) {
+            return res.status(400).json({ error: 'Invalid temporary upload reference.' });
+          }
+          blobPathnames.push(file.pathname);
+        }
+        for (const file of blobFiles) {
+          const mimeType = cleanMimeType(file.mimeType || '');
+          if (!SUPPORTED_MIME_TYPES.has(mimeType)) {
+            return res.status(400).json({ error: `Unsupported file format: ${mimeType || 'unknown'}.` });
+          }
+          const blob = await getBlob(file.pathname, { access: 'private' });
+          if (!blob || blob.statusCode !== 200) throw new Error('A temporary upload expired or could not be read. Please retry the upload.');
+          if (blob.blob.size > maxFileSizeMB * 1024 * 1024) throw new Error(`Uploaded file exceeds the maximum limit of ${maxFileSizeMB}MB.`);
+          if (!SUPPORTED_MIME_TYPES.has(cleanMimeType(blob.blob.contentType))) throw new Error('The uploaded file type does not match a supported format.');
+          multimodalFiles.push({
+            buffer: await streamToBuffer(blob.stream),
+            mimeType: cleanMimeType(blob.blob.contentType),
+            originalName: path.basename(file.name || 'upload'),
+            size: blob.blob.size,
+          });
+        }
+      }
+
+      if (!req.is('application/json')) {
+        multimodalFiles = uploadedFiles.map((f) => ({
+          buffer: f.buffer,
+          mimeType: cleanMimeType(f.mimetype),
+          originalName: f.originalname,
+          size: f.size,
+        }));
+      }
+
+      const uploadedFileCount = req.is('application/json') ? multimodalFiles.length : uploadedFiles.length;
 
       console.log(
-        `[POST /api/analyze] Incoming request: textLen=${text.length}, files=${uploadedFiles.length}, forceDemo=${forceDemo}, scenarioId=${scenarioId}`
+        `[POST /api/analyze] Incoming request: textLen=${text.length}, files=${uploadedFileCount}, forceDemo=${forceDemo}, scenarioId=${scenarioId}`
       );
 
       // Handle Scenario Demo / Fallback Demo Mode
@@ -173,20 +276,12 @@ app.post(
       }
 
       // Live mode validation: must have text or at least one file
-      if (!text.trim() && uploadedFiles.length === 0) {
+      if (!text.trim() && uploadedFileCount === 0) {
         return res.status(400).json({
           error: 'Please provide either a text description, upload a file, or record a voice note to analyze.',
           code: 'EMPTY_SUBMISSION',
         });
       }
-
-      // Prepare multimodal files for Gemini
-      const multimodalFiles: MultimodalFile[] = uploadedFiles.map((f) => ({
-        buffer: f.buffer,
-        mimeType: f.mimetype.split(';')[0].trim().toLowerCase(),
-        originalName: f.originalname,
-        size: f.size,
-      }));
 
       // Call Gemini multimodal service
       const analysisResult = await geminiService.analyzeMultimodal(text, multimodalFiles);
@@ -202,6 +297,12 @@ app.post(
         demoAvailable: true,
         details: process.env.NODE_ENV === 'development' ? err.stack : undefined,
       });
+    } finally {
+      if (blobPathnames.length > 0) {
+        await deleteBlob(blobPathnames).catch((error) => {
+          console.warn('[POST /api/analyze] Could not delete temporary private upload(s):', error.message);
+        });
+      }
     }
   }
 );
@@ -231,7 +332,7 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 
 // Serve frontend in production if built
 const distPath = path.resolve(__dirname, '../../dist');
-if (fs.existsSync(distPath)) {
+if (!isVercel && fs.existsSync(distPath)) {
   console.log(`[Server] Serving production static assets from: ${distPath}`);
   app.use(express.static(distPath));
   app.get('*', (_req: Request, res: Response) => {
@@ -240,7 +341,7 @@ if (fs.existsSync(distPath)) {
 }
 
 // Start listener
-app.listen(port, () => {
+if (!isVercel) app.listen(port, () => {
   console.log(`\n=================================================`);
   console.log(` BridgeAI Backend Server Running`);
   console.log(` URL: http://localhost:${port}`);
@@ -249,3 +350,5 @@ app.listen(port, () => {
   console.log(` Max File Size: ${maxFileSizeMB}MB`);
   console.log(`=================================================\n`);
 });
+
+export default app;

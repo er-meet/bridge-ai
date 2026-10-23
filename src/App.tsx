@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { upload } from '@vercel/blob/client';
 import { Header } from './components/Header.js';
 import { WorkspaceInput } from './components/WorkspaceInput.js';
 import { ResultsDashboard } from './components/ResultsDashboard.js';
@@ -8,6 +9,16 @@ import { BridgeAnalysisResult, BridgeAnalysisResultSchema, SystemHealth } from '
 
 const STORAGE_KEY = 'bridge_ai_history_v1';
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
+const USE_VERCEL_BLOB_UPLOAD = import.meta.env.VITE_USE_VERCEL_BLOB_UPLOAD === 'true';
+
+function normalizeUploadMime(file: File): string {
+  const mime = file.type.split(';')[0].trim().toLowerCase();
+  if (mime === 'image/jpg') return 'image/jpeg';
+  if (mime === 'audio/mp3') return 'audio/mpeg';
+  if (['audio/wave', 'audio/x-wav'].includes(mime)) return 'audio/wav';
+  if (mime === 'audio/x-m4a' || mime === 'audio/m4a') return 'audio/mp4';
+  return mime;
+}
 
 export const App: React.FC = () => {
   const [hasApiKey, setHasApiKey] = useState(false);
@@ -109,15 +120,33 @@ export const App: React.FC = () => {
     const progressTimers: number[] = [];
 
     try {
-      const formData = new FormData();
-      formData.append('text', text);
-      formData.append('isDemo', String(demoFlag));
-      if (scenarioId) {
-        formData.append('scenarioId', scenarioId);
-      }
-
-      for (const file of files) {
-        formData.append('files', file);
+      let requestBody: FormData | string;
+      let requestHeaders: HeadersInit | undefined;
+      if (USE_VERCEL_BLOB_UPLOAD && files.length > 0) {
+        setAnalysisStage('Uploading files securely to private storage...');
+        const blobFiles = await Promise.all(files.map(async (file) => {
+          const mimeType = normalizeUploadMime(file);
+          const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(-120) || 'upload';
+          const blob = await upload(
+            `bridgeai-temp/${crypto.randomUUID()}/${safeName}`,
+            file,
+            {
+              access: 'private',
+              handleUploadUrl: `${API_BASE_URL}/api/blob-upload`,
+              contentType: mimeType,
+            }
+          );
+          return { pathname: blob.pathname, name: file.name, mimeType, size: file.size };
+        }));
+        requestBody = JSON.stringify({ text, isDemo: demoFlag, scenarioId: scenarioId || '', files: blobFiles });
+        requestHeaders = { 'Content-Type': 'application/json' };
+      } else {
+        const formData = new FormData();
+        formData.append('text', text);
+        formData.append('isDemo', String(demoFlag));
+        if (scenarioId) formData.append('scenarioId', scenarioId);
+        for (const file of files) formData.append('files', file);
+        requestBody = formData;
       }
 
       // The API does not provide streaming progress, so report the real wait
@@ -126,9 +155,11 @@ export const App: React.FC = () => {
         setAnalysisStage('Waiting for Gemini to return the structured report...');
       }, 1000));
 
+      setAnalysisStage('Sending your input to Gemini...');
       const response = await fetch(`${API_BASE_URL}/api/analyze`, {
         method: 'POST',
-        body: formData,
+        headers: requestHeaders,
+        body: requestBody,
       });
 
       if (!response.ok) {
